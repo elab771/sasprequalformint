@@ -1309,8 +1309,27 @@
             }
 
             var helv = await pdfDoc.embedFont(StandardFonts.Helvetica);
+            var helvBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
         
-            function setTextSafe(name, value) {
+            // Standard RGB color operators (PDF "rg" operator) used in Default Appearance strings
+            var DA_COLOR_RED = '1 0 0 rg';
+            var DA_COLOR_GREEN = '0 0.5 0 rg';
+            var DA_COLOR_BLUE = '0 0 1 rg';
+            var DA_COLOR_BLACK = '0 0 0 rg';
+        
+            function applyFieldStyle(field, daColor) {
+              try {
+                var acro = field.acroField;
+                var existingDA = (acro.getDefaultAppearance && acro.getDefaultAppearance()) || '';
+                var tfMatch = existingDA.match(/\/[^\s]+\s+[\d.]+\s+Tf/);
+                var tfPart = tfMatch ? tfMatch[0] : '/Helv 11 Tf';
+                acro.setDefaultAppearance(daColor + ' ' + tfPart);
+              } catch (e) {
+                console.warn('Could not apply field color/style:', e.message);
+              }
+            }
+        
+            function setTextSafe(name, value, style) {
               var candidates = [name];
               if (name.indexOf('undefined.') !== 0) candidates.push('undefined.' + name);
               if (name.indexOf('.') === 0) candidates.push(name.slice(1));
@@ -1320,12 +1339,23 @@
                 try {
                   var field = form.getTextField(candidates[c]);
                   field.setText(value || '');
-                  field.updateAppearances(helv);
+                  if (style && style.daColor) {
+                    applyFieldStyle(field, style.daColor);
+                  }
+                  field.updateAppearances((style && style.bold) ? helvBold : helv);
                   field.enableReadOnly();
                   return;
                 } catch (e) { }
               }
               console.warn('PDF field not found under any known name variant:', name);
+            }
+        
+            function styleForCsdApprovalValue(value) {
+              var v = (value || '').toUpperCase();
+              if (v === 'NO') return { bold: true, daColor: DA_COLOR_RED };
+              if (v === '*YES') return { bold: true, daColor: DA_COLOR_BLUE };
+              if (v === 'YES') return { bold: true, daColor: DA_COLOR_GREEN };
+              return null;
             }
         
             async function setSigSafe(name, imgEl) {
@@ -1349,12 +1379,20 @@
         
             var qualSelects = getQualificationSelects();
             for (var i = 0; i < qualSelects.length && i < QUAL_FIELD_MAP.length; i++) {
-              setTextSafe(QUAL_FIELD_MAP[i], qualSelects[i].value);
+              var qFieldName = QUAL_FIELD_MAP[i];
+              var qValue = qualSelects[i].value;
+              var isCsdApprovalField = qFieldName && qFieldName.indexOf('ctxt') === 0;
+              var qStyle = isCsdApprovalField ? styleForCsdApprovalValue(qValue) : null;
+              setTextSafe(qFieldName, qValue, qStyle);
             }
         
             var remarksInputs = getQualRemarksInputs();
             for (var r = 0; r < REMARKS_FIELD_MAP.length && r < remarksInputs.length; r++) {
-              if (remarksInputs[r]) setTextSafe(REMARKS_FIELD_MAP[r], remarksInputs[r].value.trim());
+              if (remarksInputs[r]) {
+                var remarkVal = remarksInputs[r].value.trim();
+                var remarkStyle = remarkVal ? { bold: false, daColor: DA_COLOR_BLUE } : null;
+                setTextSafe(REMARKS_FIELD_MAP[r], remarkVal, remarkStyle);
+              }
             }
         
             var furtherRemarksEl = getFurtherRemarksTextarea();
@@ -1382,10 +1420,18 @@
         
             var identityInput = profileInputs[5];
             var iqama = (identityInput && identityInput.value.trim()) ? identityInput.value.trim().replace(/[^a-zA-Z0-9]/g, '') : 'UNKNOWN';
+        
+            var companyNameInput = profileInputs[1];
+            var companyNameVal = (companyNameInput && companyNameInput.value) ? companyNameInput.value.trim() : '';
+            // Company ID = leading portion of the Company Name up to (not including) the first " - " separator
+            var companyId = companyNameVal ? companyNameVal.split(/\s-\s/)[0].trim() : 'UNKNOWN';
+            companyId = companyId.replace(/[\\/:*?"<>|]/g, ''); // strip filesystem-unsafe characters only
+        
             var now = new Date();
             function pad(n) { return String(n).padStart(2, '0'); }
-            var stamp = now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate()) + '_' + pad(now.getHours()) + pad(now.getMinutes()) + pad(now.getSeconds());
-            var filename = iqama + '_sasprequalresult_' + stamp + '.pdf';
+            var MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+            var stamp = pad(now.getDate()) + MONTH_ABBR[now.getMonth()] + pad(now.getFullYear() % 100);
+            var filename = 'intres_' + companyId + '_' + iqama + '_' + stamp + '.pdf';
         
             var a = document.createElement('a');
             a.href = url;
